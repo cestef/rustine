@@ -24,8 +24,8 @@ rustine inspect patch.bin -v
 ## features
 
 - bsdiff compression
-- checksums (--checksum) + verification (--verify)
-- bidirectional patches (-r / --reverse)
+- checksums (`--checksum`) + verification (`--verify`)
+- bidirectional patches (`-r` / `--reverse`)
 - streaming for large files (>100mb)
 - reads raw BSDIFF4 patches
 

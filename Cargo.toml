@@ -1,0 +1,18 @@
+[package]
+name = "rustine"
+description = "binary diffing tool. creates patches between binary files. applies them too, if you're feeling optimistic."
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+facet = { git = "https://github.com/facet-rs/facet.git", branch = "main" }
+facet-args = { git = "https://github.com/facet-rs/facet.git", branch = "main" }
+facet-toml = { git = "https://github.com/facet-rs/facet.git", branch = "main" }
+facet-reflect = { git = "https://github.com/facet-rs/facet.git", branch = "main" }
+indicatif = "0.18"
+miette = { version = "7.6.0", features = ["fancy"] }
+owo-colors = "4.2.3"
+pretty-hex = "0.4"
+qbsdiff = "1.4.4"
+thiserror = "2.0.17"
+weezl = "0.1.12"

@@ -41,6 +41,10 @@ pub enum Command {
         /// Embed checksums for verification
         #[facet(default, args::named)]
         checksum: bool,
+
+        /// Include reverse patch for bidirectional patching
+        #[facet(default, args::named, args::short = 'r')]
+        reverse: bool,
     },
     Apply {
         #[facet(args::positional)]
@@ -55,6 +59,10 @@ pub enum Command {
         /// Verify patch can be applied without writing output
         #[facet(default, args::named)]
         dry_run: bool,
+
+        /// Apply patch in reverse
+        #[facet(default, args::named, args::short = 'R')]
+        reverse: bool,
 
         /// Enable verbose output
         #[facet(default, args::named, args::short = 'v')]
@@ -79,31 +87,5 @@ pub enum Command {
         /// Enable verbose output
         #[facet(default, args::named, args::short = 'v')]
         verbose: bool,
-    },
-    Reverse {
-        #[facet(args::positional)]
-        base: PathBuf,
-
-        #[facet(args::positional)]
-        patched: PathBuf,
-
-        #[facet(default, args::named, args::short = 'o')]
-        output: Option<PathBuf>,
-
-        /// Enable verbose output
-        #[facet(default, args::named, args::short = 'v')]
-        verbose: bool,
-
-        /// Suppress all output except errors
-        #[facet(default, args::named, args::short = 'q')]
-        quiet: bool,
-
-        /// Overwrite output file if it exists
-        #[facet(default, args::named, args::short = 'f')]
-        force: bool,
-
-        /// Embed checksums for verification
-        #[facet(default, args::named)]
-        checksum: bool,
     },
 }

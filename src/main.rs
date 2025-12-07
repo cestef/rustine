@@ -44,38 +44,28 @@ fn main() -> miette::Result<()> {
             quiet,
             force,
             checksum,
+            reverse,
         } => {
             let level = Level::from_flags(verbose, quiet);
-            generate(base, patched, output, level, force, checksum)?
+            generate(base, patched, output, level, force, checksum, reverse)?
         }
         rustine::cli::Command::Apply {
             base,
             patch,
             output,
             dry_run,
+            reverse,
             verbose,
             quiet,
             force,
             verify,
         } => {
             let level = Level::from_flags(verbose, quiet);
-            apply(base, patch, output, level, force, dry_run, verify)?
+            apply(base, patch, output, level, force, dry_run, reverse, verify)?
         }
         rustine::cli::Command::Inspect { patch, verbose } => {
             let level = Level::from_flags(verbose, false);
             inspect(patch, level)?
-        }
-        rustine::cli::Command::Reverse {
-            base,
-            patched,
-            output,
-            verbose,
-            quiet,
-            force,
-            checksum,
-        } => {
-            let level = Level::from_flags(verbose, quiet);
-            reverse(base, patched, output, level, force, checksum)?
         }
     }
 
@@ -89,6 +79,7 @@ fn generate(
     level: Level,
     force: bool,
     checksum: bool,
+    reverse: bool,
 ) -> Result<()> {
     // Validate
     io::check::exists(&base)?;
@@ -102,48 +93,67 @@ fn generate(
     let patched_data = io::read_streaming(&patched, &ctx)?;
     let orig_size = patched_data.len() as u64;
 
-    // Generate patch
+    // Generate forward patch
     ctx.msg(&format!(
         "Generating patch from {} → {}",
         base.file_name().unwrap_or_default().to_string_lossy(),
         patched.file_name().unwrap_or_default().to_string_lossy()
     ));
-    let mut patch_data = core::diff::create(&base_data, &patched_data)?;
+    let forward_patch = core::diff::create(&base_data, &patched_data)?;
+
+    // Build patch data with new format
+    let mut patch = core::format::PatchData::new(forward_patch);
 
     // Add checksums if requested
     if checksum {
-        let base_hash = core::checksum::hash(&base_data);
-        let output_hash = core::checksum::hash(&patched_data);
-        patch_data = core::checksum::wrap_patch(base_hash, output_hash, &patch_data);
+        let base_hash = core::format::hash(&base_data);
+        let output_hash = core::format::hash(&patched_data);
+        patch = patch.with_checksums(base_hash, output_hash);
     }
+
+    // Add reverse patch if requested
+    if reverse {
+        ctx.msg(&format!(
+            "Generating reverse patch from {} → {}",
+            patched.file_name().unwrap_or_default().to_string_lossy(),
+            base.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        let reverse_patch = core::diff::create(&patched_data, &base_data)?;
+        patch = patch.with_reverse(reverse_patch);
+    }
+
+    // Serialize patch
+    let patch_data = patch.serialize();
 
     // Write output
     let out_path = output.unwrap_or_else(|| default_output(&base, ".patch"));
     let patch_size = io::write(&out_path, &patch_data, force, &ctx)?;
 
     // Show results
-    show_gen_result(&ctx, &out_path, orig_size, patch_size);
+    show_gen_result(&ctx, &out_path, orig_size, patch_size, reverse);
 
     Ok(())
 }
 
-fn show_gen_result(ctx: &Ctx, path: &Path, orig: u64, patch: u64) {
+fn show_gen_result(ctx: &Ctx, path: &Path, orig: u64, patch: u64, has_reverse: bool) {
     use ui::fmt;
     let reduction = fmt::reduce(orig, patch);
 
     match ctx.level() {
         Level::Quiet => {}
         Level::Normal => {
+            let reverse_msg = if has_reverse { " (bidirectional)" } else { "" };
             ctx.done(&format!(
-                "{} Wrote {} to {} {} reduction",
+                "{} Wrote {} to {}{} {} reduction",
                 fmt::ok(),
                 fmt::bytes(patch),
                 fmt::path(path.display()),
+                reverse_msg,
                 fmt::reduction(reduction)
             ));
         }
         Level::Verbose => {
-            ctx.done(&format!(
+            let mut msg = format!(
                 "{} Generated patch\n   {} Original size: {}\n   {} Patch size:    {}\n   {} Saved to:      {}\n   {} Reduction:     {}",
                 fmt::ok(),
                 fmt::info(),
@@ -154,7 +164,11 @@ fn show_gen_result(ctx: &Ctx, path: &Path, orig: u64, patch: u64) {
                 fmt::path(path.display()),
                 fmt::info(),
                 fmt::reduction(reduction)
-            ));
+            );
+            if has_reverse {
+                msg.push_str(&format!("\n   {} Bidirectional: yes", fmt::info()));
+            }
+            ctx.done(&msg);
         }
     }
 }
@@ -166,6 +180,7 @@ fn apply(
     level: Level,
     force: bool,
     dry_run: bool,
+    reverse: bool,
     verify: bool,
 ) -> Result<()> {
     // Validate
@@ -181,35 +196,48 @@ fn apply(
     let patch_file_data = io::read(&patch, &ctx)?;
     let patch_size = patch_file_data.len() as u64;
 
-    // Unwrap checksums if present
-    let (base_hash, output_hash, patch_data) = core::checksum::unwrap_patch(&patch_file_data)?;
+    // Deserialize patch
+    let patch_data = core::format::PatchData::deserialize(&patch_file_data)?;
+
+    // Select which patch to use (forward or reverse)
+    let (patch_to_apply, base_hash, output_hash) = if reverse {
+        if let Some(ref rev_patch) = patch_data.reverse_patch {
+            // When reversing: swap the checksums too
+            (rev_patch.as_slice(), patch_data.output_checksum, patch_data.base_checksum)
+        } else {
+            return Err(RustineErrorKind::MissingReversePatch.into());
+        }
+    } else {
+        (patch_data.forward_patch.as_slice(), patch_data.base_checksum, patch_data.output_checksum)
+    };
 
     // Verify base file checksum if requested and available
     if verify {
         if let Some(expected_hash) = base_hash {
             ctx.msg("Verifying base file checksum");
-            core::checksum::verify_hash(&base_data, &expected_hash)?;
+            core::format::verify_hash(&base_data, &expected_hash)?;
         }
     }
 
     // Apply patch
     ctx.msg(&format!(
-        "{} {}",
+        "{} {}{}",
         if dry_run {
             "Verifying patch for"
         } else {
             "Applying patch to"
         },
-        base.file_name().unwrap_or_default().to_string_lossy()
+        base.file_name().unwrap_or_default().to_string_lossy(),
+        if reverse { " (reverse)" } else { "" }
     ));
-    let result = core::patch::apply(&base_data, patch_data)?;
+    let result = core::patch::apply(&base_data, patch_to_apply)?;
     let result_size = result.len() as u64;
 
     // Verify output checksum if requested and available
     if verify {
         if let Some(expected_hash) = output_hash {
             ctx.msg("Verifying output checksum");
-            core::checksum::verify_hash(&result, &expected_hash)?;
+            core::format::verify_hash(&result, &expected_hash)?;
         }
     }
 
@@ -383,50 +411,6 @@ fn inspect(patch: PathBuf, level: Level) -> Result<()> {
     Ok(())
 }
 
-fn reverse(
-    base: PathBuf,
-    patched: PathBuf,
-    output: Option<PathBuf>,
-    level: Level,
-    force: bool,
-    checksum: bool,
-) -> Result<()> {
-    // Validate
-    io::check::exists(&base)?;
-    io::check::exists(&patched)?;
-
-    // Create UI context
-    let ctx = Ctx::new(level);
-
-    // Read files (swapped order for reverse patch, use streaming for large files)
-    let base_data = io::read_streaming(&base, &ctx)?;
-    let patched_data = io::read_streaming(&patched, &ctx)?;
-    let orig_size = base_data.len() as u64;
-
-    // Generate reverse patch (patched → base)
-    ctx.msg(&format!(
-        "Generating reverse patch from {} → {}",
-        patched.file_name().unwrap_or_default().to_string_lossy(),
-        base.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let mut patch_data = core::diff::create(&patched_data, &base_data)?;
-
-    // Add checksums if requested (note: checksums are for the reverse direction)
-    if checksum {
-        let base_hash = core::checksum::hash(&patched_data);
-        let output_hash = core::checksum::hash(&base_data);
-        patch_data = core::checksum::wrap_patch(base_hash, output_hash, &patch_data);
-    }
-
-    // Write output
-    let out_path = output.unwrap_or_else(|| default_output(&base, ".reverse.patch"));
-    let patch_size = io::write(&out_path, &patch_data, force, &ctx)?;
-
-    // Show results
-    show_gen_result(&ctx, &out_path, orig_size, patch_size);
-
-    Ok(())
-}
 
 fn show_inspect_result(ctx: &Ctx, path: &Path, info: &core::inspect::PatchInfo) {
     use ui::fmt;
@@ -449,7 +433,7 @@ fn show_inspect_result(ctx: &Ctx, path: &Path, info: &core::inspect::PatchInfo) 
         }
         Level::Verbose => {
             let mut msg = format!(
-                "{} Patch information\n   {} File:          {}\n   {} Format:        {}\n   {} Patch size:    {}\n   {} Output size:   {}\n   {} Valid:         {}",
+                "{} Patch information\n   {} File:          {}\n   {} Format:        {}\n   {} Patch size:    {}\n   {} Output size:   {}\n   {} Valid:         {}\n   {} Bidirectional: {}",
                 fmt::info(),
                 fmt::info(),
                 fmt::path(path.display()),
@@ -460,7 +444,9 @@ fn show_inspect_result(ctx: &Ctx, path: &Path, info: &core::inspect::PatchInfo) 
                 fmt::info(),
                 fmt::bytes(info.expected_output_size),
                 fmt::info(),
-                if info.is_valid { "yes" } else { "no" }
+                if info.is_valid { "yes" } else { "no" },
+                fmt::info(),
+                if info.has_reverse { "yes" } else { "no" }
             );
 
             if info.has_checksums {

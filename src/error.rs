@@ -71,6 +71,27 @@ pub enum RustineErrorKind {
         help("the file may have been corrupted or modified")
     )]
     ChecksumMismatch { expected: String, actual: String },
+
+    #[error("patch does not contain reverse data")]
+    #[diagnostic(
+        code(rustine::missing_reverse_patch),
+        help("generate the patch with --reverse/-r flag to enable bidirectional patching")
+    )]
+    MissingReversePatch,
+
+    #[error("unsupported patch format version: {version}")]
+    #[diagnostic(
+        code(rustine::unsupported_version),
+        help("this version of rustine may be too old to read this patch format")
+    )]
+    UnsupportedVersion { version: u8 },
+
+    #[error("patch file is corrupted or truncated")]
+    #[diagnostic(
+        code(rustine::corrupted_patch),
+        help("the patch file may have been corrupted during transfer or storage")
+    )]
+    CorruptedPatch { details: String },
 }
 
 #[derive(Debug)]

@@ -19,8 +19,14 @@ rustine generate working.bin broken.bin -o mistake.patch
 # make a patch with checksums (trust issues edition)
 rustine generate working.bin broken.bin -o mistake.patch --checksum
 
+# make a bidirectional patch (go both ways)
+rustine generate working.bin broken.bin -o bidir.patch --checksum -r
+
 # apply a patch
 rustine apply working.bin mistake.patch -o broken.bin
+
+# apply a patch in reverse (undo your mistakes)
+rustine apply broken.bin bidir.patch -o working.bin --reverse
 
 # apply with verification (because you've been hurt before)
 rustine apply working.bin mistake.patch -o broken.bin --verify
@@ -30,11 +36,6 @@ rustine apply working.bin mistake.patch --dry-run -v
 
 # inspect a patch (trust but verify)
 rustine inspect mistake.patch -v
-
-# create a reverse patch (for when you inevitably regret this)
-rustine reverse working.bin broken.bin -o undo.patch
-
-# the circle of life
 ```
 
 ## features
@@ -43,8 +44,9 @@ rustine reverse working.bin broken.bin -o undo.patch
 - compression, because misery loves company
 - checksum verification (for when your download manager lies)
 - patch inspection (look before you leap)
-- reverse patches (ctrl+z for adults)
+- bidirectional patches (apply forward or reverse with `--reverse/-R`)
 - byte-level preview of what you're about to wreck
+- extensible binary format (RUSTINE2) with backward compatibility
 - streaming mode for large files (>100mb), because ram is expensive
 - probably won't corrupt your files (no promises)
 

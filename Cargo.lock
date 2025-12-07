@@ -173,7 +173,7 @@ dependencies = [
 [[package]]
 name = "facet"
 version = "0.31.8"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
  "facet-core",
  "facet-macros",
@@ -183,7 +183,7 @@ dependencies = [
 [[package]]
 name = "facet-args"
 version = "0.31.7"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
  "facet",
  "facet-core",
@@ -197,7 +197,7 @@ dependencies = [
 [[package]]
 name = "facet-core"
 version = "0.31.8"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
  "autocfg",
  "bitflags",
@@ -206,9 +206,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "facet-macro-parse"
+version = "0.1.0"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
+dependencies = [
+ "facet-macro-types",
+ "proc-macro2",
+ "quote",
+ "unsynn",
+]
+
+[[package]]
+name = "facet-macro-types"
+version = "0.1.0"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unsynn",
+]
+
+[[package]]
 name = "facet-macros"
 version = "0.31.8"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
  "facet-core",
  "facet-macros-impl",
@@ -217,8 +238,10 @@ dependencies = [
 [[package]]
 name = "facet-macros-impl"
 version = "0.31.8"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
+ "facet-macro-parse",
+ "facet-macro-types",
  "proc-macro2",
  "quote",
  "strsim",
@@ -228,7 +251,7 @@ dependencies = [
 [[package]]
 name = "facet-reflect"
 version = "0.31.8"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
  "facet-core",
  "facet-macros",
@@ -237,7 +260,7 @@ dependencies = [
 [[package]]
 name = "facet-solver"
 version = "0.31.7"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -246,7 +269,7 @@ dependencies = [
 [[package]]
 name = "facet-toml"
 version = "0.30.0"
-source = "git+https://github.com/facet-rs/facet.git?branch=main#45a8cb1c3cbf155480f78f746c2719b750ccd488"
+source = "git+https://github.com/facet-rs/facet.git?branch=main#d04f475d2bfc8b75a41bcb5600f44c3286261d5d"
 dependencies = [
  "ariadne",
  "facet-core",
@@ -512,7 +535,7 @@ checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
 
 [[package]]
 name = "rustine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "facet",
  "facet-args",

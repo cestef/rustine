@@ -26,7 +26,7 @@ pub enum RustineErrorKind {
     #[error("failed to parse patch file")]
     #[diagnostic(
         code(rustine::invalid_patch),
-        help("ensure the patch file is a valid bsdiff4 patch and not corrupted")
+        help("ensure the patch file is a valid RUSTINE2 or BSDIFF4 patch")
     )]
     InvalidPatch {
         #[source]

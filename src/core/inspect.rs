@@ -23,10 +23,7 @@ pub fn inspect(patch_file_data: &[u8]) -> Result<PatchInfo> {
 
     if !is_valid {
         return Err(RustineErrorKind::InvalidPatch {
-            source: std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid patch format",
-            ),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid patch format"),
         }
         .into());
     }
@@ -41,13 +38,8 @@ pub fn inspect(patch_file_data: &[u8]) -> Result<PatchInfo> {
     };
 
     // Determine format version
-    let format_version = if patch_file_data.len() >= 8 && &patch_file_data[0..8] == b"RUSTINE2" {
-        "RUSTINE2".to_string()
-    } else if patch_file_data.len() >= 8 && &patch_file_data[0..8] == b"RUSTINE1" {
-        "RUSTINE1".to_string()
-    } else {
-        "BSDIFF4".to_string()
-    };
+    let format = super::format::PatchFormat::detect(patch_file_data);
+    let format_version = format.name().to_string();
 
     Ok(PatchInfo {
         patch_size,
@@ -56,7 +48,11 @@ pub fn inspect(patch_file_data: &[u8]) -> Result<PatchInfo> {
         is_valid,
         has_checksums: patch.base_checksum.is_some() || patch.output_checksum.is_some(),
         has_reverse: patch.reverse_patch.is_some(),
-        base_checksum: patch.base_checksum.map(|h| super::format::hex_encode_public(&h)),
-        output_checksum: patch.output_checksum.map(|h| super::format::hex_encode_public(&h)),
+        base_checksum: patch
+            .base_checksum
+            .map(|h| super::format::hex_encode_public(&h)),
+        output_checksum: patch
+            .output_checksum
+            .map(|h| super::format::hex_encode_public(&h)),
     })
 }

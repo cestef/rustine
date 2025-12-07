@@ -8,6 +8,40 @@ use rustine::{
     ui::{self, Ctx, Level},
 };
 
+/// Maximum number of changes to show in verbose preview
+const MAX_PREVIEW_CHANGES: usize = 5;
+
+struct GenerateConfig {
+    base: PathBuf,
+    patched: PathBuf,
+    output: Option<PathBuf>,
+    level: Level,
+    force: bool,
+    checksum: bool,
+    reverse: bool,
+}
+
+struct ApplyConfig {
+    base: PathBuf,
+    patch: PathBuf,
+    output: Option<PathBuf>,
+    level: Level,
+    force: bool,
+    dry_run: bool,
+    reverse: bool,
+    verify: bool,
+}
+
+struct ApplyResult<'a> {
+    ctx: &'a Ctx,
+    path: Option<&'a Path>,
+    base_size: u64,
+    patch_size: u64,
+    output_size: u64,
+    dry_run: bool,
+    changes: Option<&'a [core::preview::ByteChange]>,
+}
+
 fn main() -> miette::Result<()> {
     let opts: Opts = facet_args::from_std_args()?;
 
@@ -46,8 +80,16 @@ fn main() -> miette::Result<()> {
             checksum,
             reverse,
         } => {
-            let level = Level::from_flags(verbose, quiet);
-            generate(base, patched, output, level, force, checksum, reverse)?
+            let config = GenerateConfig {
+                base,
+                patched,
+                output,
+                level: Level::from_flags(verbose, quiet),
+                force,
+                checksum,
+                reverse,
+            };
+            generate(config)?
         }
         rustine::cli::Command::Apply {
             base,
@@ -60,8 +102,17 @@ fn main() -> miette::Result<()> {
             force,
             verify,
         } => {
-            let level = Level::from_flags(verbose, quiet);
-            apply(base, patch, output, level, force, dry_run, reverse, verify)?
+            let config = ApplyConfig {
+                base,
+                patch,
+                output,
+                level: Level::from_flags(verbose, quiet),
+                force,
+                dry_run,
+                reverse,
+                verify,
+            };
+            apply(config)?
         }
         rustine::cli::Command::Inspect { patch, verbose } => {
             let level = Level::from_flags(verbose, false);
@@ -72,32 +123,24 @@ fn main() -> miette::Result<()> {
     Ok(())
 }
 
-fn generate(
-    base: PathBuf,
-    patched: PathBuf,
-    output: Option<PathBuf>,
-    level: Level,
-    force: bool,
-    checksum: bool,
-    reverse: bool,
-) -> Result<()> {
+fn generate(config: GenerateConfig) -> Result<()> {
     // Validate
-    io::check::exists(&base)?;
-    io::check::exists(&patched)?;
+    io::check::exists(&config.base)?;
+    io::check::exists(&config.patched)?;
 
     // Create UI context
-    let ctx = Ctx::new(level);
+    let ctx = Ctx::new(config.level);
 
     // Read files (use streaming for large files)
-    let base_data = io::read_streaming(&base, &ctx)?;
-    let patched_data = io::read_streaming(&patched, &ctx)?;
+    let base_data = io::read_streaming(&config.base, &ctx)?;
+    let patched_data = io::read_streaming(&config.patched, &ctx)?;
     let orig_size = patched_data.len() as u64;
 
     // Generate forward patch
     ctx.msg(&format!(
         "Generating patch from {} → {}",
-        base.file_name().unwrap_or_default().to_string_lossy(),
-        patched.file_name().unwrap_or_default().to_string_lossy()
+        io::filename(&config.base),
+        io::filename(&config.patched)
     ));
     let forward_patch = core::diff::create(&base_data, &patched_data)?;
 
@@ -105,18 +148,18 @@ fn generate(
     let mut patch = core::format::PatchData::new(forward_patch);
 
     // Add checksums if requested
-    if checksum {
+    if config.checksum {
         let base_hash = core::format::hash(&base_data);
         let output_hash = core::format::hash(&patched_data);
         patch = patch.with_checksums(base_hash, output_hash);
     }
 
     // Add reverse patch if requested
-    if reverse {
+    if config.reverse {
         ctx.msg(&format!(
             "Generating reverse patch from {} → {}",
-            patched.file_name().unwrap_or_default().to_string_lossy(),
-            base.file_name().unwrap_or_default().to_string_lossy()
+            io::filename(&config.patched),
+            io::filename(&config.base)
         ));
         let reverse_patch = core::diff::create(&patched_data, &base_data)?;
         patch = patch.with_reverse(reverse_patch);
@@ -126,11 +169,11 @@ fn generate(
     let patch_data = patch.serialize();
 
     // Write output
-    let out_path = output.unwrap_or_else(|| default_output(&base, ".patch"));
-    let patch_size = io::write(&out_path, &patch_data, force, &ctx)?;
+    let out_path = config.output.unwrap_or_else(|| default_output(&config.base, ".patch"));
+    let patch_size = io::write(&out_path, &patch_data, config.force, &ctx)?;
 
     // Show results
-    show_gen_result(&ctx, &out_path, orig_size, patch_size, reverse);
+    show_gen_result(&ctx, &out_path, orig_size, patch_size, config.reverse);
 
     Ok(())
 }
@@ -173,162 +216,151 @@ fn show_gen_result(ctx: &Ctx, path: &Path, orig: u64, patch: u64, has_reverse: b
     }
 }
 
-fn apply(
-    base: PathBuf,
-    patch: PathBuf,
-    output: Option<PathBuf>,
-    level: Level,
-    force: bool,
-    dry_run: bool,
-    reverse: bool,
-    verify: bool,
-) -> Result<()> {
+fn apply(config: ApplyConfig) -> Result<()> {
     // Validate
-    io::check::exists(&base)?;
-    io::check::exists(&patch)?;
+    io::check::exists(&config.base)?;
+    io::check::exists(&config.patch)?;
 
     // Create UI context
-    let ctx = Ctx::new(level);
+    let ctx = Ctx::new(config.level);
 
     // Read files (use streaming for large files)
-    let base_data = io::read_streaming(&base, &ctx)?;
+    let base_data = io::read_streaming(&config.base, &ctx)?;
     let base_size = base_data.len() as u64;
-    let patch_file_data = io::read(&patch, &ctx)?;
+    let patch_file_data = io::read(&config.patch, &ctx)?;
     let patch_size = patch_file_data.len() as u64;
 
     // Deserialize patch
     let patch_data = core::format::PatchData::deserialize(&patch_file_data)?;
 
     // Select which patch to use (forward or reverse)
-    let (patch_to_apply, base_hash, output_hash) = if reverse {
+    let (patch_to_apply, base_hash, output_hash) = if config.reverse {
         if let Some(ref rev_patch) = patch_data.reverse_patch {
             // When reversing: swap the checksums too
-            (rev_patch.as_slice(), patch_data.output_checksum, patch_data.base_checksum)
+            (
+                rev_patch.as_slice(),
+                patch_data.output_checksum,
+                patch_data.base_checksum,
+            )
         } else {
             return Err(RustineErrorKind::MissingReversePatch.into());
         }
     } else {
-        (patch_data.forward_patch.as_slice(), patch_data.base_checksum, patch_data.output_checksum)
+        (
+            patch_data.forward_patch.as_slice(),
+            patch_data.base_checksum,
+            patch_data.output_checksum,
+        )
     };
 
     // Verify base file checksum if requested and available
-    if verify {
-        if let Some(expected_hash) = base_hash {
+    if config.verify
+        && let Some(expected_hash) = base_hash {
             ctx.msg("Verifying base file checksum");
             core::format::verify_hash(&base_data, &expected_hash)?;
         }
-    }
 
     // Apply patch
     ctx.msg(&format!(
         "{} {}{}",
-        if dry_run {
+        if config.dry_run {
             "Verifying patch for"
         } else {
             "Applying patch to"
         },
-        base.file_name().unwrap_or_default().to_string_lossy(),
-        if reverse { " (reverse)" } else { "" }
+        io::filename(&config.base),
+        if config.reverse { " (reverse)" } else { "" }
     ));
     let result = core::patch::apply(&base_data, patch_to_apply)?;
     let result_size = result.len() as u64;
 
     // Verify output checksum if requested and available
-    if verify {
-        if let Some(expected_hash) = output_hash {
+    if config.verify
+        && let Some(expected_hash) = output_hash {
             ctx.msg("Verifying output checksum");
             core::format::verify_hash(&result, &expected_hash)?;
         }
-    }
 
     // Show preview if verbose
-    let changes = if level == Level::Verbose {
+    let changes = if config.level == Level::Verbose {
         Some(core::preview::find_changes(&base_data, &result))
     } else {
         None
     };
 
     // Write output (if not dry-run)
-    let out_path = if dry_run {
+    let out_path = if config.dry_run {
         None
     } else {
-        let path = output.unwrap_or_else(|| default_output(&base, ".patched"));
-        io::write(&path, &result, force, &ctx)?;
+        let path = config.output.unwrap_or_else(|| default_output(&config.base, ".patched"));
+        io::write(&path, &result, config.force, &ctx)?;
         Some(path)
     };
 
     // Show results
-    show_apply_result(
-        &ctx,
-        out_path.as_deref(),
+    show_apply_result(ApplyResult {
+        ctx: &ctx,
+        path: out_path.as_deref(),
         base_size,
         patch_size,
-        result_size,
-        dry_run,
-        changes.as_deref(),
-    );
+        output_size: result_size,
+        dry_run: config.dry_run,
+        changes: changes.as_deref(),
+    });
 
     Ok(())
 }
 
-fn show_apply_result(
-    ctx: &Ctx,
-    path: Option<&Path>,
-    base_sz: u64,
-    patch_sz: u64,
-    out_sz: u64,
-    dry: bool,
-    changes: Option<&[core::preview::ByteChange]>,
-) {
+fn show_apply_result(result: ApplyResult) {
     use ui::fmt;
-    match ctx.level() {
+    match result.ctx.level() {
         Level::Quiet => {}
         Level::Normal => {
-            let msg = if dry {
+            let msg = if result.dry_run {
                 format!(
                     "{} Patch verified {} output size",
                     fmt::ok(),
-                    fmt::bytes(out_sz)
+                    fmt::bytes(result.output_size)
                 )
             } else {
                 format!(
                     "{} Wrote {} to {}",
                     fmt::ok(),
-                    fmt::bytes(out_sz),
-                    fmt::path(path.unwrap().display())
+                    fmt::bytes(result.output_size),
+                    fmt::path(result.path.unwrap().display())
                 )
             };
-            ctx.done(&msg);
+            result.ctx.done(&msg);
         }
         Level::Verbose => {
-            let mut msg = if dry {
+            let mut msg = if result.dry_run {
                 format!(
                     "{} Dry-run successful\n   {} Base size:   {}\n   {} Patch size:  {}\n   {} Would create: {}",
                     fmt::ok(),
                     fmt::info(),
-                    fmt::bytes(base_sz),
+                    fmt::bytes(result.base_size),
                     fmt::info(),
-                    fmt::bytes(patch_sz),
+                    fmt::bytes(result.patch_size),
                     fmt::info(),
-                    fmt::bytes(out_sz)
+                    fmt::bytes(result.output_size)
                 )
             } else {
                 format!(
                     " {} Applied patch\n   {} Base size:   {}\n   {} Patch size:  {}\n   {} Result size: {}\n   {} Saved to:    {}",
                     fmt::ok(),
                     fmt::info(),
-                    fmt::bytes(base_sz),
+                    fmt::bytes(result.base_size),
                     fmt::info(),
-                    fmt::bytes(patch_sz),
+                    fmt::bytes(result.patch_size),
                     fmt::info(),
-                    fmt::bytes(out_sz),
+                    fmt::bytes(result.output_size),
                     fmt::info(),
-                    fmt::path(path.unwrap().display())
+                    fmt::path(result.path.unwrap().display())
                 )
             };
 
             // Add change preview if available
-            if let Some(changes) = changes {
+            if let Some(changes) = result.changes {
                 msg.push_str(&format!(
                     "\n   {} Changes:     {}",
                     fmt::info(),
@@ -336,10 +368,9 @@ fn show_apply_result(
                 ));
 
                 // Show first few changes in detail
-                let max_preview = 5;
-                for (i, change) in changes.iter().take(max_preview).enumerate() {
+                for (i, change) in changes.iter().take(MAX_PREVIEW_CHANGES).enumerate() {
                     if i == 0 {
-                        msg.push_str("\n");
+                        msg.push('\n');
                     }
                     msg.push_str(&format!(
                         "\n   {} Offset 0x{:08x}:",
@@ -361,12 +392,12 @@ fn show_apply_result(
                     }
                 }
 
-                if changes.len() > max_preview {
+                if changes.len() > MAX_PREVIEW_CHANGES {
                     msg.push_str(&format!(
                         "\n   {} ... and {} more change region{}",
                         fmt::info(),
-                        changes.len() - max_preview,
-                        if changes.len() - max_preview == 1 {
+                        changes.len() - MAX_PREVIEW_CHANGES,
+                        if changes.len() - MAX_PREVIEW_CHANGES == 1 {
                             ""
                         } else {
                             "s"
@@ -375,17 +406,13 @@ fn show_apply_result(
                 }
             }
 
-            ctx.done(&msg);
+            result.ctx.done(&msg);
         }
     }
 }
 
 fn default_output(base: &Path, ext: &str) -> PathBuf {
-    PathBuf::from(format!(
-        "{}{}",
-        base.file_name().unwrap_or_default().to_string_lossy(),
-        ext
-    ))
+    PathBuf::from(format!("{}{}", io::filename(base), ext))
 }
 
 fn inspect(patch: PathBuf, level: Level) -> Result<()> {
@@ -399,10 +426,7 @@ fn inspect(patch: PathBuf, level: Level) -> Result<()> {
     let patch_data = io::read(&patch, &ctx)?;
 
     // Inspect patch
-    ctx.msg(&format!(
-        "Inspecting patch {}",
-        patch.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    ctx.msg(&format!("Inspecting patch {}", io::filename(&patch)));
     let info = core::inspect::inspect(&patch_data)?;
 
     // Show results
@@ -410,7 +434,6 @@ fn inspect(patch: PathBuf, level: Level) -> Result<()> {
 
     Ok(())
 }
-
 
 fn show_inspect_result(ctx: &Ctx, path: &Path, info: &core::inspect::PatchInfo) {
     use ui::fmt;

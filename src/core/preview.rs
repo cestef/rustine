@@ -19,8 +19,9 @@ pub fn find_changes(old: &[u8], new: &[u8]) -> Vec<ByteChange> {
             let mut end = i;
 
             // Find end of continuous difference (with small gap tolerance)
-            while end < min_len && (old[end] != new[end] ||
-                   (end + 1 < min_len && old[end + 1] != new[end + 1])) {
+            while end < min_len
+                && (old[end] != new[end] || (end + 1 < min_len && old[end + 1] != new[end + 1]))
+            {
                 end += 1;
             }
 

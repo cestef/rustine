@@ -1,15 +1,62 @@
 use crate::{Result, RustineErrorKind};
 
-/// Magic bytes for rustine patch format v2
-const MAGIC_V2: &[u8; 8] = b"RUSTINE2";
+/// Size constants
+const HASH_SIZE: usize = 32;
+const U32_SIZE: usize = 4;
+const U64_SIZE: usize = 8;
+const RUSTINE2_HEADER_SIZE: usize = 13; // magic(8) + version(1) + flags(4)
 
-/// Magic bytes for legacy rustine patch format v1
-const MAGIC_V1: &[u8; 8] = b"RUSTINE1";
+/// Patch format types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchFormat {
+    /// RUSTINE2 format with optional features
+    Rustine2,
+    /// Raw BSDIFF4 patch
+    Bsdiff4,
+}
 
-/// Current format version
-const VERSION: u8 = 2;
+impl PatchFormat {
+    /// Magic bytes for RUSTINE2 format
+    const RUSTINE2_MAGIC: &'static [u8; 8] = b"RUSTINE2";
 
-/// Feature flags
+    /// Current RUSTINE2 version
+    const RUSTINE2_VERSION: u8 = 2;
+
+    /// Detect format from patch data
+    pub fn detect(data: &[u8]) -> Self {
+        if data.len() >= 8 && &data[0..8] == Self::RUSTINE2_MAGIC {
+            Self::Rustine2
+        } else {
+            Self::Bsdiff4
+        }
+    }
+
+    /// Get magic bytes for this format (if any)
+    pub fn magic(&self) -> Option<&'static [u8; 8]> {
+        match self {
+            Self::Rustine2 => Some(Self::RUSTINE2_MAGIC),
+            Self::Bsdiff4 => None,
+        }
+    }
+
+    /// Get version number for this format (if any)
+    pub fn version(&self) -> Option<u8> {
+        match self {
+            Self::Rustine2 => Some(Self::RUSTINE2_VERSION),
+            Self::Bsdiff4 => None,
+        }
+    }
+
+    /// Get format name as string
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Rustine2 => "RUSTINE2",
+            Self::Bsdiff4 => "BSDIFF4",
+        }
+    }
+}
+
+/// Feature flags for RUSTINE2 format
 pub const FLAG_BASE_CHECKSUM: u32 = 1 << 0; // 0x00000001
 pub const FLAG_OUTPUT_CHECKSUM: u32 = 1 << 1; // 0x00000002
 pub const FLAG_REVERSE_PATCH: u32 = 1 << 2; // 0x00000004
@@ -83,8 +130,8 @@ impl PatchData {
         let mut data = Vec::with_capacity(size);
 
         // Write header
-        data.extend_from_slice(MAGIC_V2);
-        data.push(VERSION);
+        data.extend_from_slice(PatchFormat::Rustine2.magic().unwrap());
+        data.push(PatchFormat::Rustine2.version().unwrap());
         data.extend_from_slice(&flags.to_le_bytes());
 
         // Write optional checksums
@@ -116,180 +163,137 @@ impl PatchData {
 
     /// Deserialize from bytes
     pub fn deserialize(data: &[u8]) -> Result<Self> {
-        // Check magic and determine version
-        if data.len() < 13 {
-            return Err(RustineErrorKind::CorruptedPatch {
-                details: format!("file too small ({} bytes, expected at least 13)", data.len()),
-            }
-            .into());
-        }
+        let format = PatchFormat::detect(data);
 
-        // Check for v1 legacy format
-        if &data[0..8] == MAGIC_V1 {
-            return deserialize_v1(data);
-        }
-
-        // Check for v2 format
-        if &data[0..8] != MAGIC_V2 {
-            // Try to parse as raw bsdiff patch (no magic)
-            return Ok(PatchData::new(data.to_vec()));
-        }
-
-        let version = data[8];
-        if version != VERSION {
-            return Err(RustineErrorKind::UnsupportedVersion { version }.into());
-        }
-
-        let flags = u32::from_le_bytes([data[9], data[10], data[11], data[12]]);
-        let mut offset = 13;
-
-        // Read optional checksums
-        let base_checksum = if flags & FLAG_BASE_CHECKSUM != 0 {
-            if data.len() < offset + 32 {
-                return Err(RustineErrorKind::CorruptedPatch {
-                    details: "truncated base checksum".to_string(),
+        match format {
+            PatchFormat::Rustine2 => {
+                if data.len() < RUSTINE2_HEADER_SIZE {
+                    return Err(RustineErrorKind::CorruptedPatch {
+                        details: format!(
+                            "file too small ({} bytes, expected at least {})",
+                            data.len(),
+                            RUSTINE2_HEADER_SIZE
+                        ),
+                    }
+                    .into());
                 }
-                .into());
-            }
-            let hash: [u8; 32] = data[offset..offset + 32].try_into().unwrap();
-            offset += 32;
-            Some(hash)
-        } else {
-            None
-        };
 
-        let output_checksum = if flags & FLAG_OUTPUT_CHECKSUM != 0 {
-            if data.len() < offset + 32 {
-                return Err(RustineErrorKind::CorruptedPatch {
-                    details: "truncated output checksum".to_string(),
+                let version = data[8];
+                if version != PatchFormat::Rustine2.version().unwrap() {
+                    return Err(RustineErrorKind::UnsupportedVersion { version }.into());
                 }
-                .into());
-            }
-            let hash: [u8; 32] = data[offset..offset + 32].try_into().unwrap();
-            offset += 32;
-            Some(hash)
-        } else {
-            None
-        };
 
-        // Read optional metadata
-        let metadata = if flags & FLAG_METADATA != 0 {
-            if data.len() < offset + 4 {
-                return Err(RustineErrorKind::CorruptedPatch {
-                    details: "truncated metadata length".to_string(),
-                }
-                .into());
+                deserialize_rustine2(data)
             }
-            let meta_len = u32::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ]) as usize;
-            offset += 4;
-
-            if data.len() < offset + meta_len {
-                return Err(RustineErrorKind::CorruptedPatch {
-                    details: "truncated metadata".to_string(),
-                }
-                .into());
+            PatchFormat::Bsdiff4 => {
+                // Raw BSDIFF4 patch
+                Ok(PatchData::new(data.to_vec()))
             }
-            let meta = String::from_utf8_lossy(&data[offset..offset + meta_len]).to_string();
-            offset += meta_len;
-            Some(meta)
-        } else {
-            None
-        };
-
-        // Read forward patch
-        if data.len() < offset + 8 {
-            return Err(RustineErrorKind::CorruptedPatch {
-                details: "truncated forward patch length".to_string(),
-            }
-            .into());
         }
-        let forward_len = u64::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-        ]) as usize;
-        offset += 8;
-
-        if data.len() < offset + forward_len {
-            return Err(RustineErrorKind::CorruptedPatch {
-                details: "truncated forward patch data".to_string(),
-            }
-            .into());
-        }
-        let forward_patch = data[offset..offset + forward_len].to_vec();
-        offset += forward_len;
-
-        // Read reverse patch if present
-        let reverse_patch = if flags & FLAG_REVERSE_PATCH != 0 {
-            if data.len() < offset + 8 {
-                return Err(RustineErrorKind::CorruptedPatch {
-                    details: "truncated reverse patch length".to_string(),
-                }
-                .into());
-            }
-            let reverse_len = u64::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-                data[offset + 4],
-                data[offset + 5],
-                data[offset + 6],
-                data[offset + 7],
-            ]) as usize;
-            offset += 8;
-
-            if data.len() < offset + reverse_len {
-                return Err(RustineErrorKind::CorruptedPatch {
-                    details: "truncated reverse patch data".to_string(),
-                }
-                .into());
-            }
-            let reverse = data[offset..offset + reverse_len].to_vec();
-            Some(reverse)
-        } else {
-            None
-        };
-
-        Ok(PatchData {
-            base_checksum,
-            output_checksum,
-            forward_patch,
-            reverse_patch,
-            metadata,
-        })
     }
 }
 
-/// Deserialize legacy v1 format
-fn deserialize_v1(data: &[u8]) -> Result<PatchData> {
-    if data.len() < 72 {
+/// Helper to read fixed-size data and advance offset
+fn read_bytes<const N: usize>(
+    data: &[u8],
+    offset: &mut usize,
+    field_name: &str,
+) -> Result<[u8; N]> {
+    if data.len() < *offset + N {
         return Err(RustineErrorKind::CorruptedPatch {
-            details: format!("v1 patch too small ({} bytes, expected at least 72)", data.len()),
+            details: format!("truncated {}", field_name),
         }
         .into());
     }
+    let bytes: [u8; N] = data[*offset..*offset + N].try_into().unwrap();
+    *offset += N;
+    Ok(bytes)
+}
 
-    let base_checksum: [u8; 32] = data[8..40].try_into().unwrap();
-    let output_checksum: [u8; 32] = data[40..72].try_into().unwrap();
-    let forward_patch = data[72..].to_vec();
+/// Helper to read u32 little-endian
+fn read_u32_le(data: &[u8], offset: &mut usize, field_name: &str) -> Result<u32> {
+    let bytes = read_bytes::<U32_SIZE>(data, offset, field_name)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+/// Helper to read u64 little-endian
+fn read_u64_le(data: &[u8], offset: &mut usize, field_name: &str) -> Result<u64> {
+    let bytes = read_bytes::<U64_SIZE>(data, offset, field_name)?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+/// Helper to read variable-length data
+fn read_var_bytes(
+    data: &[u8],
+    offset: &mut usize,
+    len: usize,
+    field_name: &str,
+) -> Result<Vec<u8>> {
+    if data.len() < *offset + len {
+        return Err(RustineErrorKind::CorruptedPatch {
+            details: format!("truncated {}", field_name),
+        }
+        .into());
+    }
+    let bytes = data[*offset..*offset + len].to_vec();
+    *offset += len;
+    Ok(bytes)
+}
+
+/// Deserialize RUSTINE2 format
+fn deserialize_rustine2(data: &[u8]) -> Result<PatchData> {
+    let flags = u32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+    let mut offset = RUSTINE2_HEADER_SIZE;
+
+    // Read optional checksums
+    let base_checksum = if flags & FLAG_BASE_CHECKSUM != 0 {
+        Some(read_bytes::<HASH_SIZE>(data, &mut offset, "base checksum")?)
+    } else {
+        None
+    };
+
+    let output_checksum = if flags & FLAG_OUTPUT_CHECKSUM != 0 {
+        Some(read_bytes::<HASH_SIZE>(
+            data,
+            &mut offset,
+            "output checksum",
+        )?)
+    } else {
+        None
+    };
+
+    // Read optional metadata
+    let metadata = if flags & FLAG_METADATA != 0 {
+        let meta_len = read_u32_le(data, &mut offset, "metadata length")? as usize;
+        let meta_bytes = read_var_bytes(data, &mut offset, meta_len, "metadata")?;
+        Some(String::from_utf8_lossy(&meta_bytes).to_string())
+    } else {
+        None
+    };
+
+    // Read forward patch
+    let forward_len = read_u64_le(data, &mut offset, "forward patch length")? as usize;
+    let forward_patch = read_var_bytes(data, &mut offset, forward_len, "forward patch data")?;
+
+    // Read reverse patch if present
+    let reverse_patch = if flags & FLAG_REVERSE_PATCH != 0 {
+        let reverse_len = read_u64_le(data, &mut offset, "reverse patch length")? as usize;
+        Some(read_var_bytes(
+            data,
+            &mut offset,
+            reverse_len,
+            "reverse patch data",
+        )?)
+    } else {
+        None
+    };
 
     Ok(PatchData {
-        base_checksum: Some(base_checksum),
-        output_checksum: Some(output_checksum),
+        base_checksum,
+        output_checksum,
         forward_patch,
-        reverse_patch: None,
-        metadata: None,
+        reverse_patch,
+        metadata,
     })
 }
 

@@ -1,6 +1,7 @@
 [package]
 name = "rustine"
 description = "binary diffing tool. creates patches between binary files. applies them too, if you're feeling optimistic."
+repository = "https://github.com/cestef/rustine"
 version = "0.1.0"
 edition = "2024"
 
@@ -16,3 +17,8 @@ pretty-hex = "0.4"
 qbsdiff = "1.4.4"
 thiserror = "2.0.17"
 weezl = "0.1.12"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
